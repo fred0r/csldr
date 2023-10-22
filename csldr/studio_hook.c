@@ -3,14 +3,15 @@
 bool studio_gpuskin;
 bool studio_fastpath;
 
-static studio_context_t context;
-
 static cvar_t *studio_fastpath_toggle;
 
 static studiohdr_t *s_header;
 static model_t *s_model;
 
 #define FASTPATH_ENABLED (studio_fastpath && studio_fastpath_toggle->value)
+
+static studio_context_t *current_context;
+#define GET_CONTEXT() (current_context ? current_context : (current_context = R_StudioReserveQueuedModel()))
 
 static void Hk_StudioSetHeader(void *header)
 {
@@ -55,7 +56,7 @@ static void Hk_StudioEntityLight(alight_t *lighting)
 {
 	if (FASTPATH_ENABLED)
 	{
-		R_StudioEntityLight(&context);
+		R_StudioEntityLight(GET_CONTEXT());
 	}
 	else
 	{
@@ -77,8 +78,10 @@ static void Hk_StudioSetupLighting(alight_t *lighting)
 		assert(s_model);
 		assert(s_header);
 
-		R_StudioInitContext(&context, IEngineStudio.GetCurrentEntity(), s_model, s_header);
-		R_StudioSetupLighting(&context, lighting);
+		studio_context_t *context = GET_CONTEXT();
+
+		R_StudioInitContext(context, IEngineStudio.GetCurrentEntity(), s_model, s_header);
+		R_StudioSetupLighting(context, lighting);
 	}
 	else
 	{
@@ -92,7 +95,7 @@ void Hk_StudioSetupModel(int bodypart, void **ppbodypart, void **ppsubmodel)
 
 	if (FASTPATH_ENABLED)
 	{
-		R_StudioSetupModel(&context, bodypart);
+		R_StudioSetupModel(GET_CONTEXT(), bodypart);
 	}
 }
 
@@ -100,7 +103,7 @@ static void Hk_StudioDrawPoints(void)
 {
 	if (FASTPATH_ENABLED)
 	{
-		R_StudioDrawPoints(&context);
+		// nothing
 	}
 	else
 	{
@@ -146,11 +149,13 @@ static void Hk_StudioDrawBones(void)
 
 static void Hk_SetupRenderer(int rendermode)
 {
-	IEngineStudio.SetupRenderer(rendermode);
-
 	if (FASTPATH_ENABLED)
 	{
-		R_StudioSetupRenderer(&context);
+		// nothing
+	}
+	else
+	{
+		IEngineStudio.SetupRenderer(rendermode);
 	}
 }
 
@@ -158,10 +163,13 @@ static void Hk_RestoreRenderer(void)
 {
 	if (FASTPATH_ENABLED)
 	{
-		R_StudioRestoreRenderer(&context);
+		R_StudioCommitQueuedModel(GET_CONTEXT());
+		current_context = NULL;
 	}
-
-	IEngineStudio.RestoreRenderer();
+	else
+	{
+		IEngineStudio.RestoreRenderer();
+	}
 }
 
 static void StudioInfo_f(void)
@@ -197,6 +205,7 @@ void HookEngineStudio(engine_studio_api_t *studio)
 
 	// see if we can do gpu skinning
 	studio_gpuskin = (GLAD_GL_VERSION_2_1 && GLAD_GL_ARB_uniform_buffer_object);
+	assert(studio_gpuskin); // wtf
 
 	gEngfuncs.pfnAddCommand("studio_info", StudioInfo_f);
 

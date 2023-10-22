@@ -13,20 +13,13 @@ static cvar_t *r_glowshellfreq;
 static cvar_t *gl_fog;
 
 // for cpu chrome
-int studio_drawcount;
+static int studio_drawcount;
 
 int studio_frame;
 
 static vec3_t chrome_origin;
 
 static dlight_t *cl_elights;
-
-#define MAX_ELIGHTS 3
-
-// store these globally for unknown reasons
-static int elight_num;
-static float elight_pos[MAX_ELIGHTS][4];
-static float elight_color[MAX_ELIGHTS][3];
 
 static GLint studio_fog;
 
@@ -164,8 +157,8 @@ void R_StudioInit(void)
 
 #ifndef NDEUBG
 	// compile all shaders at launch and assert uniforms
-	for (int i = 0; i < NUM_OPTIONS; i++)
-		(void)R_StudioSelectShader(i);
+	//for (int i = 0; i < NUM_OPTIONS; i++)
+	//	(void)R_StudioSelectShader(i);
 #endif
 
 	if (studio_gpuskin)
@@ -260,10 +253,6 @@ static studio_shader_t *R_StudioSelectShader(int options)
 
 void R_StudioEntityLight(studio_context_t *ctx)
 {
-	elight_num = 0;
-	memset(elight_color, 0, sizeof(elight_color));
-	memset(elight_pos, 0, sizeof(elight_pos));
-
 	float lstrength[MAX_ELIGHTS];
 	memset(lstrength, 0, sizeof(lstrength));
 
@@ -316,13 +305,13 @@ void R_StudioEntityLight(studio_context_t *ctx)
 				continue;
 		}
 
-		int index = elight_num;
+		int index = ctx->elight_num;
 
-		if (elight_num >= MAX_ELIGHTS)
+		if (ctx->elight_num >= MAX_ELIGHTS)
 		{
 			index = -1;
 
-			for (int j = 0; j < elight_num; j++)
+			for (int j = 0; j < ctx->elight_num; j++)
 			{
 				if (lstrength[j] < max_radius && lstrength[j] < strength)
 				{
@@ -337,16 +326,16 @@ void R_StudioEntityLight(studio_context_t *ctx)
 
 		lstrength[index] = strength;
 
-		VectorCopy(elight->origin, elight_pos[index]);
-		elight_pos[index][3] = r2;
+		VectorCopy(elight->origin, ctx->elight_pos[index]);
+		ctx->elight_pos[index][3] = r2;
 
-		elight_color[index][0] = (float)gammavars.lineartable[elight->color.r] * (1.0f / 255.0f);
-		elight_color[index][1] = (float)gammavars.lineartable[elight->color.g] * (1.0f / 255.0f);
-		elight_color[index][2] = (float)gammavars.lineartable[elight->color.b] * (1.0f / 255.0f);
+		ctx->elight_color[index][0] = (float)gammavars.lineartable[elight->color.r] * (1.0f / 255.0f);
+		ctx->elight_color[index][1] = (float)gammavars.lineartable[elight->color.g] * (1.0f / 255.0f);
+		ctx->elight_color[index][2] = (float)gammavars.lineartable[elight->color.b] * (1.0f / 255.0f);
 
-		if (index >= elight_num)
+		if (index >= ctx->elight_num)
 		{
-			elight_num = index + 1;
+			ctx->elight_num = index + 1;
 		}
 	}
 }
@@ -361,9 +350,6 @@ void R_StudioInitContext(studio_context_t *ctx, cl_entity_t *entity, model_t *mo
 	ctx->model = model;
 	ctx->header = header;
 	ctx->cache = GetStudioCache(ctx->model, header);
-
-	// mikkotodo move? this never changes
-	ctx->bonetransform = (mat3x4_t(*)[])IEngineStudio.StudioGetBoneTransform();
 }
 
 void R_StudioSetupLighting(studio_context_t *ctx, alight_t *lighting)
@@ -374,8 +360,15 @@ void R_StudioSetupLighting(studio_context_t *ctx, alight_t *lighting)
 	VectorCopy(lighting->plightvec, ctx->lightvec);
 }
 
+void R_StudioSetupModel(studio_context_t *ctx, int bodypart_index)
+{
+	// mikkotodo fix
+	if (ctx->num_bodyparts < 32)
+		ctx->bodyparts[ctx->num_bodyparts++] = bodypart_index;
+}
+
 // different to engine's but doesn't matter here
-inline static int RandomLong(int low, int high)
+static int RandomLong(int low, int high)
 {
 	return low + (rand() % (high - low + 1));
 }
@@ -504,7 +497,7 @@ static int R_StudioGetOptions(studio_context_t *ctx)
 	else if (studio_fog == GL_EXP2)
 		options |= HAVE_FOG;
 
-	if (elight_num)
+	if (ctx->elight_num)
 		options |= HAVE_ELIGHTS;
 
 	if (ctx->cache->texflags & STUDIO_NF_FLATSHADE)
@@ -522,24 +515,9 @@ static int R_StudioGetOptions(studio_context_t *ctx)
 	return options;
 }
 
-void R_StudioSetupRenderer(studio_context_t *ctx)
+static void R_StudioBeginModel(studio_context_t *ctx)
 {
-	static int current_frame;
-
-	if (current_frame != studio_frame)
-	{
-		// per frame stuff
-		current_frame = studio_frame;
-
-		studio_fog = 0;
-
-		if (glIsEnabled(GL_FOG))
-		{
-			glGetIntegerv(GL_FOG_MODE, &studio_fog);
-		}
-	}
-
-	int options = R_StudioGetOptions(ctx);
+	int options = ctx->options;
 	studio_shader_t *shader = R_StudioSelectShader(options);
 	ctx->shader = shader;
 
@@ -567,7 +545,6 @@ void R_StudioSetupRenderer(studio_context_t *ctx)
 
 	glUniform4fv(shader->u_colormix, 1, colormix);
 
-	// mikkotodo is this correct
 	if ((options & (HAVE_ADDITIVE | HAVE_GLOWSHELL)) == 0)
 	{
 		glUniform1f(shader->u_ambientlight, ctx->ambientlight);
@@ -602,8 +579,8 @@ void R_StudioSetupRenderer(studio_context_t *ctx)
 
 	if (options & HAVE_ELIGHTS)
 	{
-		glUniform4fv(shader->u_elight_pos, elight_num, &elight_pos[0][0]);
-		glUniform3fv(shader->u_elight_color, elight_num, &elight_color[0][0]);
+		glUniform4fv(shader->u_elight_pos, ctx->elight_num, &ctx->elight_pos[0][0]);
+		glUniform3fv(shader->u_elight_color, ctx->elight_num, &ctx->elight_color[0][0]);
 	}
 
 	// setup other stuff
@@ -617,17 +594,11 @@ void R_StudioSetupRenderer(studio_context_t *ctx)
 
 	if (studio_gpuskin)
 	{
-		glBindBuffer(GL_UNIFORM_BUFFER, studio_ubo);
-		glBufferSubData(GL_UNIFORM_BUFFER, 0, ctx->header->numbones * sizeof(mat3x4_t), &(*ctx->bonetransform)[0][0][0]);
+		glBufferSubData(GL_UNIFORM_BUFFER, 0, ctx->header->numbones * sizeof(mat3x4_t), &ctx->cpy_bonetransform[0][0][0]);
 	}
 
 	if (studio_gpuskin)
 	{
-		glEnableVertexAttribArray(shader_studio_a_pos);
-		glEnableVertexAttribArray(shader_studio_a_normal);
-		glEnableVertexAttribArray(shader_studio_a_texcoord);
-		glEnableVertexAttribArray(shader_studio_a_bones);
-
 		glVertexAttribPointer(shader_studio_a_pos, 3, GL_FLOAT, GL_FALSE, sizeof(studio_gpu_vert_t), (void *)Q_OFFSETOF(studio_gpu_vert_t, pos));
 		glVertexAttribPointer(shader_studio_a_normal, 3, GL_FLOAT, GL_FALSE, sizeof(studio_gpu_vert_t), (void *)Q_OFFSETOF(studio_gpu_vert_t, norm));
 		glVertexAttribPointer(shader_studio_a_texcoord, 2, GL_FLOAT, GL_FALSE, sizeof(studio_gpu_vert_t), (void *)Q_OFFSETOF(studio_gpu_vert_t, texcoord));
@@ -635,23 +606,50 @@ void R_StudioSetupRenderer(studio_context_t *ctx)
 	}
 	else
 	{
-		glEnableVertexAttribArray(shader_studio_a_pos);
-		glEnableVertexAttribArray(shader_studio_a_normal);
-		glEnableVertexAttribArray(shader_studio_a_texcoord);
-
 		glVertexAttribPointer(shader_studio_a_pos, 3, GL_FLOAT, GL_FALSE, sizeof(studio_cpu_vert_t), (void *)Q_OFFSETOF(studio_cpu_vert_t, pos));
 		glVertexAttribPointer(shader_studio_a_normal, 3, GL_FLOAT, GL_FALSE, sizeof(studio_cpu_vert_t), (void *)Q_OFFSETOF(studio_cpu_vert_t, norm));
 		glVertexAttribPointer(shader_studio_a_texcoord, 2, GL_FLOAT, GL_FALSE, sizeof(studio_cpu_vert_t), (void *)Q_OFFSETOF(studio_cpu_vert_t, texcoord));
 	}
 }
 
-void R_StudioRestoreRenderer(studio_context_t *ctx)
+static void R_StudioEndModel(studio_context_t *ctx)
 {
-	glUseProgram(0);
-
-	// restore opengl state
 	if (cl_righthand->value && ctx->entity == IEngineStudio.GetViewEntity())
 		glEnable(GL_CULL_FACE);
+}
+
+static void R_StudioBeginBatch(void)
+{
+	static int current_frame;
+
+	if (current_frame != studio_frame)
+	{
+		// per frame stuff
+		current_frame = studio_frame;
+
+		if (glIsEnabled(GL_FOG))
+			glGetIntegerv(GL_FOG_MODE, &studio_fog);
+		else
+			studio_fog = 0;
+	}
+
+	// mikkotodo this doesn't fix anything
+	glActiveTexture(GL_TEXTURE0);
+
+	glEnableVertexAttribArray(shader_studio_a_pos);
+	glEnableVertexAttribArray(shader_studio_a_normal);
+	glEnableVertexAttribArray(shader_studio_a_texcoord);
+
+	if (studio_gpuskin)
+	{
+		glEnableVertexAttribArray(shader_studio_a_bones);
+		glBindBuffer(GL_UNIFORM_BUFFER, studio_ubo);
+	}
+}
+
+static void R_StudioEndBatch(void)
+{
+	glUseProgram(0);
 
 	glDisableVertexAttribArray(shader_studio_a_pos);
 	glDisableVertexAttribArray(shader_studio_a_normal);
@@ -660,33 +658,11 @@ void R_StudioRestoreRenderer(studio_context_t *ctx)
 	if (studio_gpuskin)
 	{
 		glDisableVertexAttribArray(shader_studio_a_bones);
+		glBindBuffer(GL_UNIFORM_BUFFER, 0);
 	}
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-
-	if (studio_gpuskin)
-	{
-		glBindBuffer(GL_UNIFORM_BUFFER, 0);
-	}
-}
-
-void R_StudioSetupModel(studio_context_t *ctx, int bodypart_index)
-{
-	if (bodypart_index > ctx->header->numbodyparts)
-		bodypart_index = 0;
-
-	mstudiobodyparts_t *bodyparts = (mstudiobodyparts_t *)((byte *)ctx->header + ctx->header->bodypartindex);
-	mstudiobodyparts_t *bodypart = &bodyparts[bodypart_index];
-
-	mem_bodypart_t *mem_bodypart = &ctx->cache->bodyparts[bodypart_index];
-
-	int model_index = (ctx->entity->curstate.body / bodypart->base) % bodypart->nummodels;
-
-	mstudiomodel_t *submodels = (mstudiomodel_t *)((byte *)ctx->header + bodypart->modelindex);
-
-	ctx->submodel = &submodels[model_index];
-	ctx->mem_submodel = &mem_bodypart->models[model_index];
 }
 
 static void CalcChromeCPU(float *out, int bone_id, mat3x4_t bone, vec3_t normal)
@@ -732,13 +708,10 @@ static void CalcChromeCPU(float *out, int bone_id, mat3x4_t bone, vec3_t normal)
 	out[1] = (DotProduct(normal, up_anim) + 1.0f) * 0.5f;
 }
 
-void R_StudioDrawPoints(studio_context_t *ctx)
+static void R_StudioDrawPoints(studio_context_t *ctx, mstudiomodel_t *submodel, mem_model_t *mem_submodel)
 {
 	studiohdr_t *header = ctx->header;
 	studiohdr_t *textureheader = R_LoadTextures(ctx->model, header);
-
-	mstudiomodel_t *submodel = ctx->submodel;
-	mem_model_t *mem_submodel = ctx->mem_submodel;
 
 	mstudiomesh_t *meshes = (mstudiomesh_t *)((byte *)header + submodel->meshindex);
 	mstudiotexture_t *textures = (mstudiotexture_t *)((byte *)textureheader + textureheader->textureindex);
@@ -751,8 +724,6 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 		skins = &skins[skin * textureheader->numskinref];
 	}
 
-	int forceflags = IEngineStudio.GetForceFaceFlags();
-
 	if (!studio_gpuskin)
 	{
 		studio_cpu_vert_t *anim_verts = (studio_cpu_vert_t *)Mem_TempAlloc(sizeof(studio_cpu_vert_t) * mem_submodel->num_verts);
@@ -764,7 +735,7 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 			mem_mesh_t *mem_mesh = &mem_submodel->meshes[i];
 			mstudiotexture_t *texture = &textures[skins[mesh->skinref]];
 
-			int flags = texture->flags | forceflags;
+			int flags = texture->flags | ctx->forceflags;
 
 			if (flags & STUDIO_NF_CHROME)
 			{
@@ -774,17 +745,17 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 					studio_vertbone_t *srcbone = &ctx->cache->vertbones[mem_mesh->ofs_verts + j];
 					studio_cpu_vert_t *dst = &anim_verts[vert_ofs++];
 
-					mat3x4_t *bone = &(*ctx->bonetransform)[srcbone->bones[0]];
+					mat3x4_t *bone = &ctx->cpy_bonetransform[srcbone->bones[0]];
 					dst->pos[0] = DotProduct(src->pos, (*bone)[0]) + (*bone)[0][3];
 					dst->pos[1] = DotProduct(src->pos, (*bone)[1]) + (*bone)[1][3];
 					dst->pos[2] = DotProduct(src->pos, (*bone)[2]) + (*bone)[2][3];
 
-					bone = &(*ctx->bonetransform)[srcbone->bones[1]];
+					bone = &ctx->cpy_bonetransform[srcbone->bones[1]];
 					dst->norm[0] = DotProduct(src->norm, (*bone)[0]);
 					dst->norm[1] = DotProduct(src->norm, (*bone)[1]);
 					dst->norm[2] = DotProduct(src->norm, (*bone)[2]);
 
-					CalcChromeCPU(dst->texcoord, srcbone->bones[1], (*ctx->bonetransform)[srcbone->bones[1]], src->norm);
+					CalcChromeCPU(dst->texcoord, srcbone->bones[1], ctx->cpy_bonetransform[srcbone->bones[1]], src->norm);
 				}
 			}
 			else
@@ -795,12 +766,12 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 					studio_vertbone_t *srcbone = &ctx->cache->vertbones[mem_mesh->ofs_verts + j];
 					studio_cpu_vert_t *dst = &anim_verts[vert_ofs++];
 
-					mat3x4_t *bone = &(*ctx->bonetransform)[srcbone->bones[0]];
+					mat3x4_t *bone = &ctx->cpy_bonetransform[srcbone->bones[0]];
 					dst->pos[0] = DotProduct(src->pos, (*bone)[0]) + (*bone)[0][3];
 					dst->pos[1] = DotProduct(src->pos, (*bone)[1]) + (*bone)[1][3];
 					dst->pos[2] = DotProduct(src->pos, (*bone)[2]) + (*bone)[2][3];
 
-					bone = &(*ctx->bonetransform)[srcbone->bones[1]];
+					bone = &ctx->cpy_bonetransform[srcbone->bones[1]];
 					dst->norm[0] = DotProduct(src->norm, (*bone)[0]);
 					dst->norm[1] = DotProduct(src->norm, (*bone)[1]);
 					dst->norm[2] = DotProduct(src->norm, (*bone)[2]);
@@ -827,7 +798,7 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 		mem_texture_t *mem_texture = &ctx->cache->textures[skins[mesh->skinref]];
 		mem_mesh_t *mem_mesh = &mem_submodel->meshes[i];
 
-		int flags = texture->flags | forceflags;
+		int flags = texture->flags | ctx->forceflags;
 
 		if (ctx->shader->u_tex_flatshade != -1)
 			glUniform1i(ctx->shader->u_tex_flatshade, (flags & STUDIO_NF_FLATSHADE) ? true : false);
@@ -877,4 +848,116 @@ void R_StudioDrawPoints(studio_context_t *ctx)
 			glDepthMask(GL_TRUE);
 		}
 	}
+}
+
+static void R_StudioGetSubmodel(studio_context_t *ctx, int bodypart_index, mstudiomodel_t **submodel, mem_model_t **mem_submodel)
+{
+	if (bodypart_index > ctx->header->numbodyparts)
+		bodypart_index = 0;
+
+	mstudiobodyparts_t *bodyparts = (mstudiobodyparts_t *)((byte *)ctx->header + ctx->header->bodypartindex);
+	mstudiobodyparts_t *bodypart = &bodyparts[bodypart_index];
+
+	mem_bodypart_t *mem_bodypart = &ctx->cache->bodyparts[bodypart_index];
+
+	int model_index = (ctx->entity->curstate.body / bodypart->base) % bodypart->nummodels;
+
+	mstudiomodel_t *submodels = (mstudiomodel_t *)((byte *)ctx->header + bodypart->modelindex);
+
+	*submodel = &submodels[model_index];
+	*mem_submodel = &mem_bodypart->models[model_index];
+}
+
+// mikkotodo tweak this
+#define MAX_QUEUE_MODELS 1024
+
+static int num_queue_models;
+static studio_context_t queue_models[MAX_QUEUE_MODELS];
+
+static void R_StudioDrawQueuedModel(studio_context_t *ctx)
+{
+	// mikkotodo better place for this?
+	studio_drawcount++;
+
+	R_StudioBeginModel(ctx);
+
+	for (int i = 0; i < ctx->num_bodyparts; i++)
+	{
+		mstudiomodel_t *submodel;
+		mem_model_t *mem_submodel;
+		R_StudioGetSubmodel(ctx, i, &submodel, &mem_submodel);
+		R_StudioDrawPoints(ctx, submodel, mem_submodel);
+	}
+
+	R_StudioEndModel(ctx);
+}
+
+static int SortQueueModel(const void *a, const void *b)
+{
+	studio_context_t *ctx1 = *(studio_context_t **)a;
+	studio_context_t *ctx2 = *(studio_context_t **)b;
+
+	int result = ctx1->options - ctx2->options;
+
+	if (!result)
+		result = ctx1->cache->studio_vbo - ctx2->cache->studio_vbo;
+
+	return result;
+}
+
+static void R_StudioFlushQueue(void)
+{
+	studio_context_t *queue_model_ptrs[MAX_QUEUE_MODELS];
+
+	if (!num_queue_models)
+		return;
+
+	for (int i = 0; i < num_queue_models; i++)
+		queue_model_ptrs[i] = &queue_models[i];
+
+	// seems to help in some cases
+	qsort(queue_model_ptrs, num_queue_models, sizeof(*queue_model_ptrs), SortQueueModel);
+
+	R_StudioBeginBatch();
+
+	for (int i = 0; i < num_queue_models; i++)
+		R_StudioDrawQueuedModel(queue_model_ptrs[i]);
+
+	R_StudioEndBatch();
+
+	num_queue_models = 0;
+}
+
+studio_context_t *R_StudioReserveQueuedModel(void)
+{
+	if (num_queue_models >= MAX_QUEUE_MODELS)
+		Plat_Error("Too many studio models");
+
+	studio_context_t *result = &queue_models[num_queue_models++];
+	memset(result, 0, sizeof(*result)); // mikkotodo needed?
+	return result;
+}
+
+void R_StudioCommitQueuedModel(studio_context_t *ctx)
+{
+	// finish context
+	memcpy(ctx->cpy_bonetransform, IEngineStudio.StudioGetBoneTransform(), sizeof(mat3x4_t) * ctx->header->numbones);
+	ctx->forceflags = IEngineStudio.GetForceFaceFlags();
+	ctx->options = R_StudioGetOptions(ctx);
+
+	// dumb as fuck
+	if (ctx->entity == IEngineStudio.GetViewEntity())
+		R_StudioFlushQueue();
+}
+
+void Hk_DrawNormalTriangles(void)
+{
+	cl_funcs.pDrawNormalTriangles();
+	R_StudioFlushQueue();
+}
+
+void Hk_DrawTransparentTriangles(void)
+{
+	cl_funcs.pDrawTransparentTriangles();
+	R_StudioFlushQueue();
 }

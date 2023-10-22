@@ -78,14 +78,14 @@ EXPORT void HUD_DirectorMessage(int iSize, void *pbuf)
 
 EXPORT void HUD_DrawNormalTriangles(void)
 {
-	/* pass through */
-	cl_funcs.pDrawNormalTriangles();
+	/* hooked */
+	Hk_DrawNormalTriangles();
 }
 
 EXPORT void HUD_DrawTransparentTriangles(void)
 {
-	/* pass through */
-	cl_funcs.pDrawTransparentTriangles();
+	/* hooked */
+	Hk_DrawTransparentTriangles();
 }
 
 EXPORT void HUD_Frame(double time)
